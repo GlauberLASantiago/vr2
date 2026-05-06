@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Dominantes Secundárias em WebXR (Centro-Fixado)</title>
+    <title>Dominantes Secundárias em WebXR (Com Áudio)</title>
     
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎵</text></svg>">
 
@@ -11,192 +11,144 @@
     <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-extras@7.2.0/dist/aframe-extras.min.js"></script>
     <script src="https://unpkg.com/aframe-environment-component@1.3.3/dist/aframe-environment-component.min.js"></script>
     <script src="https://unpkg.com/aframe-look-at-component@0.8.0/dist/aframe-look-at-component.min.js"></script>
+    
     <script src="https://cdnjs.cloudflare.com/ajax/libs/nipplejs/0.10.1/nipplejs.min.js"></script>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
 
     <style>
         :root {
             --primary: #4a90e2;
-            --secondary: #e24a4a;
             --bg-glass: rgba(15, 20, 30, 0.7);
             --text-color: #ffffff;
         }
 
         body, html {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-            overflow: hidden;
-            touch-action: none; /* Bloqueia zoom/scroll nativo */
-            user-select: none; /* Impede seleção de texto acidental */
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            overflow: hidden; touch-action: none; user-select: none;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background-color: #000;
         }
 
-        /* Loading Screen */
+        /* Loading / Start Screen */
         #loading-screen {
-            position: absolute;
-            top: 0; left: 0; width: 100%; height: 100%;
-            background: #111;
-            z-index: 9999;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            color: var(--primary);
-            transition: opacity 0.5s ease-out;
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: #111; z-index: 9999; display: flex;
+            flex-direction: column; justify-content: center; align-items: center;
+            color: var(--primary); transition: opacity 0.5s ease-out;
+            text-align: center; padding: 20px; box-sizing: border-box;
         }
 
-        .loader-spinner {
-            border: 4px solid rgba(255,255,255,0.1);
-            border-top: 4px solid var(--primary);
-            border-radius: 50%;
-            width: 50px; height: 50px;
-            animation: spin 1s linear infinite;
-            margin-bottom: 20px;
+        .btn-start {
+            margin-top: 20px; font-size: 1.2rem; padding: 15px 30px;
+            background: var(--primary); color: white; border: none;
+            border-radius: 8px; cursor: pointer; font-weight: bold;
+            box-shadow: 0 4px 15px rgba(74, 144, 226, 0.4);
+            transition: transform 0.2s, background 0.2s;
         }
-
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .btn-start:active { transform: scale(0.95); }
 
         /* HUD Principal */
         #hud-container {
-            position: absolute;
-            top: 0; left: 0; width: 100%; height: 100%;
-            pointer-events: none; /* Deixa os cliques passarem para a cena/botoes */
-            z-index: 1000;
-            display: flex;
-            flex-direction: column;
-            justify-content: space-between;
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; z-index: 1000; display: flex;
+            flex-direction: column; justify-content: space-between;
         }
 
-        /* Top Bar */
         .top-bar {
-            background: var(--bg-glass);
-            backdrop-filter: blur(5px);
-            padding: 15px 20px;
-            text-align: center;
-            color: var(--text-color);
-            border-bottom: 1px solid rgba(255,255,255,0.1);
-            pointer-events: auto;
+            background: var(--bg-glass); backdrop-filter: blur(5px);
+            padding: 15px 20px; text-align: center; color: var(--text-color);
+            border-bottom: 1px solid rgba(255,255,255,0.1); pointer-events: auto;
         }
 
-        .top-bar h1 {
-            margin: 0;
-            font-size: 1.2rem;
-            letter-spacing: 1px;
-            text-transform: uppercase;
-        }
+        .top-bar h1 { margin: 0; font-size: 1.2rem; letter-spacing: 1px; text-transform: uppercase; }
 
-        /* Botoes Flutuantes */
         .controls-panel {
-            position: absolute;
-            top: 70px;
-            right: 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            pointer-events: auto;
+            position: absolute; top: 70px; right: 20px; display: flex;
+            flex-direction: column; gap: 10px; pointer-events: auto;
         }
 
-        button {
-            background: var(--bg-glass);
-            border: 1px solid rgba(255,255,255,0.2);
-            color: white;
-            border-radius: 8px;
-            padding: 12px;
-            cursor: pointer;
-            backdrop-filter: blur(5px);
-            font-weight: bold;
-            transition: background 0.3s;
+        button.hud-btn {
+            background: var(--bg-glass); border: 1px solid rgba(255,255,255,0.2);
+            color: white; border-radius: 8px; padding: 12px; cursor: pointer;
+            backdrop-filter: blur(5px); font-weight: bold; transition: background 0.3s;
         }
+        button.hud-btn:hover { background: rgba(74, 144, 226, 0.5); }
 
-        button:hover { background: rgba(74, 144, 226, 0.5); }
+        .zoom-controls { display: flex; gap: 5px; }
+        .zoom-controls button.hud-btn { width: 40px; }
 
-        .zoom-controls {
-            display: flex;
-            gap: 5px;
-        }
-        .zoom-controls button { width: 40px; }
-
-        /* Joysticks */
         .joystick-zone {
-            position: absolute;
-            bottom: 20px;
-            width: 150px;
-            height: 150px;
-            pointer-events: auto;
+            position: absolute; bottom: 20px; width: 150px; height: 150px; pointer-events: auto;
         }
-
-        #joystick-left { left: 20px; } /* Mantido visualmente, desativado no JS */
         #joystick-right { right: 20px; }
 
-        /* Crosshair */
         #crosshair {
-            position: absolute;
-            top: 50%; left: 50%;
-            width: 10px; height: 10px;
-            background: rgba(255, 255, 255, 0.8);
-            border-radius: 50%;
-            transform: translate(-50%, -50%);
-            pointer-events: none;
+            position: absolute; top: 50%; left: 50%; width: 10px; height: 10px;
+            background: rgba(255, 255, 255, 0.8); border-radius: 50%;
+            transform: translate(-50%, -50%); pointer-events: none;
             box-shadow: 0 0 5px rgba(0,0,0,0.5);
         }
     </style>
 
     <script>
-        // Componente: Textos Interativos
+        // Configuração Global do Tone.js
+        // Usamos AMSynth para um som de piano/teclado elétrico suave
+        const synth = new Tone.PolySynth(Tone.AMSynth).toDestination();
+        synth.volume.value = -5; // Ajusta o volume geral
+
+        // Componente: Textos e Acordes Interativos
         AFRAME.registerComponent('interactive-text', {
+            schema: {
+                notes: { type: 'string', default: 'C4, E4, G4' } // Recebe as notas em string
+            },
             init: function () {
                 this.el.addEventListener('click', () => {
-                    // Animação de encolhimento
-                    this.el.setAttribute('animation', 'property: scale; to: 0 0 0; dur: 400; easing: easeInBack');
+                    // Toca o acorde extraindo as notas da propriedade
+                    const chordArray = this.data.notes.split(',').map(n => n.trim());
                     
-                    // Som de feedback (opcional visual via log)
-                    console.log("Acorde clicado/tocado!");
+                    // Dispara o som (Duração de 2 segundos)
+                    if (Tone.context.state === 'running') {
+                        synth.triggerAttackRelease(chordArray, "2n");
+                    }
 
-                    // Desaparecer após a animação
-                    setTimeout(() => {
-                        this.el.setAttribute('visible', 'false');
-                    }, 400);
+                    // Animação visual de feedback
+                    this.el.setAttribute('animation__scale', 'property: scale; to: 1.3 1.3 1.3; dur: 150; easing: easeOutQuad; dir: alternate; loop: 1');
+                    
+                    // Piscar cor (se for uma geometria)
+                    const mesh = this.el.querySelector('*[color]');
+                    if(mesh) {
+                        const originalColor = mesh.getAttribute('color');
+                        mesh.setAttribute('color', '#FFFFFF');
+                        setTimeout(() => mesh.setAttribute('color', originalColor), 150);
+                    }
                 });
             }
         });
 
-        // Componente: Look Joystick (Atualizado para câmera central fixa, apenas olhar)
+        // Componente: Look Joystick (Apenas rotação, câmera fixa no centro)
         AFRAME.registerComponent('look-joystick', {
             init: function() {
                 this.lookVector = { x: 0, y: 0 };
                 this.camera = document.querySelector('#main-camera');
-                
-                const rightZone = document.getElementById('joystick-right'); // Controla o olhar
+                const rightZone = document.getElementById('joystick-right');
 
-                // Config NippleJS apenas para o joystick direito
                 this.managerRight = nipplejs.create({
-                    zone: rightZone,
-                    mode: 'static',
-                    position: { left: '50%', top: '50%' },
-                    color: '#e24a4a'
+                    zone: rightZone, mode: 'static', position: { left: '50%', top: '50%' }, color: '#e24a4a'
                 });
 
-                // Eventos Direita (Olhar)
                 this.managerRight.on('move', (e, data) => {
-                    this.lookVector.x = data.vector.x;
-                    this.lookVector.y = data.vector.y;
+                    this.lookVector.x = data.vector.x; this.lookVector.y = data.vector.y;
                 }).on('end', () => { this.lookVector = { x: 0, y: 0 }; });
             },
             tick: function(time, timeDelta) {
                 if(!this.camera) return;
-
-                // 1. Rotação (Joystick Direito)
                 if (this.lookVector.x !== 0 || this.lookVector.y !== 0) {
-                    const lookSpeed = 0.04; // Sensibilidade do olhar
+                    const lookSpeed = 0.04;
                     const lookControls = this.camera.components['look-controls'];
-                    
                     if (lookControls) {
                         lookControls.yawObject.rotation.y -= this.lookVector.x * lookSpeed;
                         lookControls.pitchObject.rotation.x -= this.lookVector.y * lookSpeed;
-                        
-                        // Limitar o eixo X (pitch) para não virar de ponta cabeça (-90 a 90 graus)
                         const maxPitch = Math.PI / 2;
                         lookControls.pitchObject.rotation.x = Math.max(-maxPitch, Math.min(maxPitch, lookControls.pitchObject.rotation.x));
                     }
@@ -204,21 +156,32 @@
             }
         });
 
-        // Lógica de UI e Setup Inicial
+        // Lógica de UI e Start
         window.onload = () => {
-            // Loading
-            setTimeout(() => {
-                const loader = document.getElementById('loading-screen');
+            const loader = document.getElementById('loading-screen');
+            
+            document.getElementById('btn-start-scene').addEventListener('click', async () => {
+                // Inicia o contexto de Áudio do Tone.js (Obrigatório por segurança dos browsers)
+                await Tone.start();
+                console.log('Tone.js Audio Context started');
+
+                // Solicita permissão para os sensores de movimento no iOS 13+
+                if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                    try {
+                        await DeviceOrientationEvent.requestPermission();
+                    } catch (error) { console.error('Erro de giroscópio:', error); }
+                }
+
+                // Esconde a tela
                 loader.style.opacity = '0';
                 setTimeout(() => loader.style.display = 'none', 500);
-            }, 2000);
+            });
 
-            // Botoes
+            // Lógica dos Botões HUD
             const env = document.querySelector('[environment]');
             const rig = document.querySelector('#camera-rig');
             const cam = document.querySelector('#main-camera');
-            let isNight = false;
-            let isMap = false;
+            let isNight = false; let isMap = false;
 
             document.getElementById('btn-theme').addEventListener('click', () => {
                 isNight = !isNight;
@@ -228,20 +191,12 @@
             document.getElementById('btn-map').addEventListener('click', () => {
                 isMap = !isMap;
                 const lookControls = cam.components['look-controls'];
-                
                 if (isMap) {
-                    // Sobe o rig e inclina a câmera pra baixo (ainda no centro)
                     rig.setAttribute('animation__y', 'property: position; to: 0 12 0; dur: 1000; easing: easeInOutQuad');
-                    if(lookControls) {
-                        // Inclina 45 graus pra baixo
-                        lookControls.pitchObject.rotation.x = -Math.PI / 4;
-                    }
+                    if(lookControls) lookControls.pitchObject.rotation.x = -Math.PI / 4;
                 } else {
                     rig.setAttribute('animation__y', 'property: position; to: 0 0 0; dur: 1000; easing: easeInOutQuad');
-                    if(lookControls) {
-                        // Restaura inclinação
-                        lookControls.pitchObject.rotation.x = 0;
-                    }
+                    if(lookControls) lookControls.pitchObject.rotation.x = 0;
                 }
             });
 
@@ -260,27 +215,27 @@
 <body>
 
     <div id="loading-screen">
-        <div class="loader-spinner"></div>
-        <h2>Carregando Ambiente Musical Fixado...</h2>
+        <h2>🎵 Dominantes Secundárias</h2>
+        <p>Aprenda harmonia interagindo com a cena 3D.</p>
+        <button id="btn-start-scene" class="btn-start">Entrar na Cena e Ativar Áudio</button>
     </div>
 
     <div id="hud-container">
         <div class="top-bar">
-            <h1>Dominantes Secundárias em Dó (Fixado)</h1>
+            <h1>Dominantes Secundárias em Dó</h1>
         </div>
 
         <div class="controls-panel">
-            <button id="btn-theme">🌙 Dia/Noite</button>
-            <button id="btn-map">🗺️ Visão Mapa</button>
+            <button id="btn-theme" class="hud-btn">🌙 Dia/Noite</button>
+            <button id="btn-map" class="hud-btn">🗺️ Visão Mapa</button>
             <div class="zoom-controls">
-                <button id="btn-zoom-in">🔍+</button>
-                <button id="btn-zoom-out">🔍-</button>
+                <button id="btn-zoom-in" class="hud-btn">🔍+</button>
+                <button id="btn-zoom-out" class="hud-btn">🔍-</button>
             </div>
         </div>
 
         <div id="crosshair"></div>
 
-        <div id="joystick-left" class="joystick-zone"></div>
         <div id="joystick-right" class="joystick-zone"></div>
     </div>
 
@@ -295,16 +250,19 @@
         <a-entity position="6 0 0">
             <a-cylinder radius="1.5" height="0.4" color="#DDDDDD"></a-cylinder>
             <a-text value="C Maior\n(Tônica)" font="exo2bold" position="0 1.5 0" align="center" color="#FFFFFF" look-at="#main-camera" scale="1.5 1.5 1.5"></a-text>
-            <a-box position="0 0.5 0" color="#FFFFFF" scale="0.8 0.8 0.8" animation="property: rotation; to: 0 360 0; loop: true; dur: 8000; easing: linear"></a-box>
+            
+            <a-entity class="clickable" interactive-text="notes: C4, E4, G4" position="0 0.5 0">
+                <a-box color="#FFFFFF" scale="0.8 0.8 0.8" animation="property: rotation; to: 0 360 0; loop: true; dur: 8000; easing: linear"></a-box>
+            </a-entity>
         </a-entity>
 
         <a-entity position="1.85 0 5.71">
             <a-cylinder radius="1" height="0.4" color="#F1C40F"></a-cylinder>
             <a-text value="Alvo: G Maior (V)" font="exo2bold" position="0 0.5 1" align="center" color="#F1C40F" look-at="#main-camera"></a-text>
             
-            <a-entity class="clickable" interactive-text position="0 2 0">
+            <a-entity class="clickable" interactive-text="notes: D4, F#4, A4, C5" position="0 2 0">
                 <a-sphere radius="0.5" color="#E67E22" material="wireframe: true" animation="property: rotation; to: 360 360 0; loop: true; dur: 5000; easing: linear"></a-sphere>
-                <a-text value="V/V: D7\n(Clique-me)" font="exo2bold" position="0 0.8 0" align="center" color="#FFF" look-at="#main-camera" scale="1.2 1.2 1.2" text="outlineColor: #000; outlineWidth: 0.1"></a-text>
+                <a-text value="V/V: D7\n(Tocar)" font="exo2bold" position="0 0.8 0" align="center" color="#FFF" look-at="#main-camera" scale="1.2 1.2 1.2" text="outlineColor: #000; outlineWidth: 0.1"></a-text>
             </a-entity>
         </a-entity>
 
@@ -312,9 +270,9 @@
             <a-cylinder radius="1" height="0.4" color="#3498DB"></a-cylinder>
             <a-text value="Alvo: D menor (ii)" font="exo2bold" position="0 0.5 1" align="center" color="#3498DB" look-at="#main-camera"></a-text>
             
-            <a-entity class="clickable" interactive-text position="0 2 0">
+            <a-entity class="clickable" interactive-text="notes: A3, C#4, E4, G4" position="0 2 0">
                 <a-octahedron radius="0.5" color="#2980B9" animation="property: rotation; to: 0 360 360; loop: true; dur: 6000; easing: linear"></a-octahedron>
-                <a-text value="V/ii: A7\n(Clique-me)" font="exo2bold" position="0 0.8 0" align="center" color="#FFF" look-at="#main-camera" scale="1.2 1.2 1.2" text="outlineColor: #000; outlineWidth: 0.1"></a-text>
+                <a-text value="V/ii: A7\n(Tocar)" font="exo2bold" position="0 0.8 0" align="center" color="#FFF" look-at="#main-camera" scale="1.2 1.2 1.2" text="outlineColor: #000; outlineWidth: 0.1"></a-text>
             </a-entity>
         </a-entity>
 
@@ -322,9 +280,9 @@
             <a-cylinder radius="1" height="0.4" color="#E74C3C"></a-cylinder>
             <a-text value="Alvo: A menor (vi)" font="exo2bold" position="0 0.5 1" align="center" color="#E74C3C" look-at="#main-camera"></a-text>
             
-            <a-entity class="clickable" interactive-text position="0 2 0">
+            <a-entity class="clickable" interactive-text="notes: E4, G#4, B4, D5" position="0 2 0">
                 <a-dodecahedron radius="0.4" color="#C0392B" animation="property: rotation; to: 360 0 360; loop: true; dur: 7000; easing: linear"></a-dodecahedron>
-                <a-text value="V/vi: E7\n(Clique-me)" font="exo2bold" position="0 0.8 0" align="center" color="#FFF" look-at="#main-camera" scale="1.2 1.2 1.2" text="outlineColor: #000; outlineWidth: 0.1"></a-text>
+                <a-text value="V/vi: E7\n(Tocar)" font="exo2bold" position="0 0.8 0" align="center" color="#FFF" look-at="#main-camera" scale="1.2 1.2 1.2" text="outlineColor: #000; outlineWidth: 0.1"></a-text>
             </a-entity>
         </a-entity>
 
@@ -332,9 +290,9 @@
             <a-cylinder radius="1" height="0.4" color="#2ECC71"></a-cylinder>
             <a-text value="Alvo: F Maior (IV)" font="exo2bold" position="0 0.5 1" align="center" color="#2ECC71" look-at="#main-camera"></a-text>
             
-            <a-entity class="clickable" interactive-text position="0 2 0">
+            <a-entity class="clickable" interactive-text="notes: C4, E4, G4, Bb4" position="0 2 0">
                 <a-tetrahedron radius="0.6" color="#27AE60" animation="property: rotation; to: 0 360 0; loop: true; dur: 4000; easing: linear"></a-tetrahedron>
-                <a-text value="V/IV: C7\n(Clique-me)" font="exo2bold" position="0 0.8 0" align="center" color="#FFF" look-at="#main-camera" scale="1.2 1.2 1.2" text="outlineColor: #000; outlineWidth: 0.1"></a-text>
+                <a-text value="V/IV: C7\n(Tocar)" font="exo2bold" position="0 0.8 0" align="center" color="#FFF" look-at="#main-camera" scale="1.2 1.2 1.2" text="outlineColor: #000; outlineWidth: 0.1"></a-text>
             </a-entity>
         </a-entity>
 
