@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Dominantes Secundárias em WebXR (Com Áudio e Lousas)</title>
     
-    <!-- Favicon -->
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎵</text></svg>">
 
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
@@ -13,6 +12,7 @@
     <script src="https://unpkg.com/aframe-environment-component@1.3.3/dist/aframe-environment-component.min.js"></script>
     <script src="https://unpkg.com/aframe-look-at-component@0.8.0/dist/aframe-look-at-component.min.js"></script>
     
+    <!-- Tone.js carregado antes dos componentes A-Frame que dependem dele -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
 
     <style>
@@ -29,7 +29,6 @@
             background-color: #000;
         }
 
-        /* Loading / Start Screen */
         #loading-screen {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             background: #111; z-index: 9999; display: flex;
@@ -47,7 +46,6 @@
         }
         .btn-start:active { transform: scale(0.95); }
 
-        /* HUD Principal */
         #hud-container {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             pointer-events: none; z-index: 1000; display: flex;
@@ -76,107 +74,142 @@
 
         .zoom-controls { display: flex; gap: 5px; }
         .zoom-controls button.hud-btn { width: 40px; }
+
+        /* Feedback visual de acorde tocado */
+        #chord-feedback {
+            position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+            background: rgba(74, 144, 226, 0.85); color: white;
+            padding: 10px 24px; border-radius: 20px; font-size: 1.1rem; font-weight: bold;
+            pointer-events: none; opacity: 0; transition: opacity 0.3s;
+            z-index: 1001; white-space: nowrap;
+        }
+        #chord-feedback.visible { opacity: 1; }
     </style>
 
     <script>
-        let synth; // O sintetizador será criado somente após o usuário clicar em "Entrar"
+        // ============================================================
+        // CORREÇÃO 1: Synth criado de forma lazy (só após interação)
+        // ============================================================
+        let synth = null;
+        let audioReady = false;
 
-        // Componente: Controle de Vídeo (Play/Pause ao clicar)
+        async function initAudio() {
+            if (audioReady) return;
+            await Tone.start();
+            synth = new Tone.PolySynth(Tone.Synth, {
+                oscillator: { type: 'triangle' },
+                envelope: { attack: 0.05, decay: 0.3, sustain: 0.4, release: 1.5 }
+            }).toDestination();
+            synth.volume.value = 0;
+            audioReady = true;
+            console.log('Tone.js pronto. Estado do contexto:', Tone.context.state);
+        }
+
+        function showChordFeedback(label) {
+            const el = document.getElementById('chord-feedback');
+            if (!el) return;
+            el.textContent = label;
+            el.classList.add('visible');
+            clearTimeout(el._timer);
+            el._timer = setTimeout(() => el.classList.remove('visible'), 2000);
+        }
+
+        // ============================================================
+        // Componente: Controle de Vídeo
+        // ============================================================
         AFRAME.registerComponent('video-controls', {
             init: function () {
                 this.el.addEventListener('mousedown', () => {
                     const videoSrc = this.el.getAttribute('src');
                     const video = document.querySelector(videoSrc);
                     if (!video) return;
-                    if (video.paused) {
-                        video.play();
-                    } else {
-                        video.pause();
-                    }
+                    video.paused ? video.play() : video.pause();
                 });
             }
         });
 
-        // Componente: Textos e Acordes Interativos
+        // ============================================================
+        // CORREÇÃO 2: interactive-text agora escuta 'click' na entidade
+        // com .clickable E dispara áudio com synth lazy
+        // CORREÇÃO 3: Notas corrigidas (Bb4 → A#4, F#4 mantido)
+        // ============================================================
         AFRAME.registerComponent('interactive-text', {
             schema: {
-                notes: { type: 'string', default: 'C4, E4, G4' }
+                notes: { type: 'string', default: 'C4, E4, G4' },
+                label: { type: 'string', default: '' }
             },
             init: function () {
-                // Usar 'mousedown' responde mais rápido que 'click', perfeito para toque e mouse
-                this.el.addEventListener('mousedown', async () => {
-                    if (!synth) return; // Segurança caso clique antes de iniciar
-                    
-                    // Garante que o contexto de áudio esteja rodando (vital para Safari/iOS)
-                    if (Tone.context.state !== 'running') {
-                        await Tone.start();
+                // Escuta no próprio elemento (que tem a classe .clickable)
+                this.el.addEventListener('click', async (evt) => {
+                    console.log('Clique detectado! Notas:', this.data.notes);
+
+                    // Garante que o áudio está inicializado
+                    await initAudio();
+
+                    if (!synth) {
+                        console.error('Synth não inicializado!');
+                        return;
                     }
 
-                    // Extrai as notas (Ex: ["C4", "E4", "G4"])
-                    const chordArray = this.data.notes.split(',').map(n => n.trim());
-                    
-                    // Dispara o acorde
-                    synth.triggerAttackRelease(chordArray, "2n");
+                    // Parse das notas (suporte a vírgula e espaço)
+                    const chordArray = this.data.notes
+                        .split(',')
+                        .map(n => n.trim())
+                        .filter(n => n.length > 0);
 
-                    // Animação visual de feedback (pulo da geometria)
-                    this.el.setAttribute('animation__scale', 'property: scale; to: 1.3 1.3 1.3; dur: 150; easing: easeOutQuad; dir: alternate; loop: 1');
-                    
-                    // Piscar cor apenas das malhas visíveis (ignorando hitboxes invisíveis)
-                    const meshes = this.el.querySelectorAll('*[color]');
-                    meshes.forEach(mesh => {
-                        const originalColor = mesh.getAttribute('color');
-                        mesh.setAttribute('color', '#FFFFFF');
-                        setTimeout(() => mesh.setAttribute('color', originalColor), 150);
-                    });
+                    console.log('Tocando acorde:', chordArray);
+
+                    try {
+                        // Usa triggerAttackRelease com tempo atual do Tone
+                        synth.triggerAttackRelease(chordArray, '1n', Tone.now());
+                    } catch (err) {
+                        console.error('Erro ao tocar acorde:', err);
+                    }
+
+                    // Feedback visual na tela
+                    showChordFeedback(this.data.label || chordArray.join(' - '));
+
+                    // Animação de escala no elemento clicado
+                    this.el.setAttribute('animation__scale',
+                        'property: scale; to: 1.3 1.3 1.3; dur: 150; easing: easeOutQuad; dir: alternate; loop: 1');
                 });
             }
         });
 
+        // ============================================================
         // Lógica de UI e Start
+        // ============================================================
         window.onload = () => {
             const loader = document.getElementById('loading-screen');
             
             document.getElementById('btn-start-scene').addEventListener('click', async () => {
-                // 1. Inicia o contexto de Áudio do Tone.js obrigatório pelo browser
-                await Tone.start();
-                console.log('Tone.js Audio Context started');
+                await initAudio();
+                console.log('Áudio ativado com sucesso!');
 
-                // 2. Cria o Sintetizador SOMENTE após a permissão do usuário
-                if (!synth) {
-                    synth = new Tone.PolySynth(Tone.Synth).toDestination();
-                    synth.volume.value = 0; // Volume normalizado
-                }
-
-                // Solicita permissão para os sensores de movimento no iOS 13+
-                if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                if (typeof DeviceOrientationEvent !== 'undefined' &&
+                    typeof DeviceOrientationEvent.requestPermission === 'function') {
                     try {
                         await DeviceOrientationEvent.requestPermission();
                     } catch (error) { console.error('Erro de giroscópio:', error); }
                 }
 
-                // Inicia o vídeo após a interação do usuário (Exigência dos navegadores)
-                const videoEl = document.getElementById('video3');
-                if (videoEl) videoEl.play().catch(e => console.log("Play automático bloqueado:", e));
-
-                // Esconde a tela de loading
                 loader.style.opacity = '0';
                 setTimeout(() => loader.style.display = 'none', 500);
             });
 
-            // Lógica dos Botões HUD
             const env = document.querySelector('[environment]');
             const rig = document.querySelector('#camera-rig');
             const cam = document.querySelector('#main-camera');
-            let isNight = false; let isMap = false;
+            let isNight = false;
+            let isMap = false;
 
-            // Lista de cenários disponíveis
             const presets = ['forest', 'egypt', 'tron', 'japan', 'volcano', 'moon', 'osiris', 'arches'];
             let currentPresetIndex = 0;
 
             document.getElementById('btn-scenario').addEventListener('click', () => {
                 currentPresetIndex = (currentPresetIndex + 1) % presets.length;
                 env.setAttribute('environment', `preset: ${presets[currentPresetIndex]}`);
-                isNight = false; // Volta ao modo claro sempre que muda de cenário
+                isNight = false;
             });
 
             document.getElementById('btn-theme').addEventListener('click', () => {
@@ -189,21 +222,21 @@
                 const lookControls = cam.components['look-controls'];
                 if (isMap) {
                     rig.setAttribute('animation__y', 'property: position; to: 0 12 0; dur: 1000; easing: easeInOutQuad');
-                    if(lookControls) lookControls.pitchObject.rotation.x = -Math.PI / 4;
+                    if (lookControls) lookControls.pitchObject.rotation.x = -Math.PI / 4;
                 } else {
                     rig.setAttribute('animation__y', 'property: position; to: 0 0 0; dur: 1000; easing: easeInOutQuad');
-                    if(lookControls) lookControls.pitchObject.rotation.x = 0;
+                    if (lookControls) lookControls.pitchObject.rotation.x = 0;
                 }
             });
 
             document.getElementById('btn-zoom-in').addEventListener('click', () => {
                 let fov = parseInt(cam.getAttribute('fov')) || 80;
-                if(fov > 30) cam.setAttribute('fov', fov - 10);
+                if (fov > 30) cam.setAttribute('fov', fov - 10);
             });
 
             document.getElementById('btn-zoom-out').addEventListener('click', () => {
                 let fov = parseInt(cam.getAttribute('fov')) || 80;
-                if(fov < 110) cam.setAttribute('fov', fov + 10);
+                if (fov < 110) cam.setAttribute('fov', fov + 10);
             });
         };
     </script>
@@ -232,13 +265,14 @@
         </div>
     </div>
 
-    <!-- REMOVIDO cursor rayOrigin. Agora a mira está na Câmera! -->
+    <!-- Feedback de acorde tocado -->
+    <div id="chord-feedback"></div>
+
     <a-scene>
         
         <a-assets>
             <img id="figura1" src="https://raw.githubusercontent.com/GlauberLASantiago/vr2/main/figura1.png" crossorigin="anonymous">
             <img id="figura2" src="https://raw.githubusercontent.com/GlauberLASantiago/vr2/main/figura2.png" crossorigin="anonymous">
-            <!-- Substituímos a figura 3 por um elemento de vídeo -->
             <video id="video3" src="https://raw.githubusercontent.com/GlauberLASantiago/vr2/main/VideoPergunta05.mp4" crossorigin="anonymous" loop="true" playsinline webkit-playsinline></video>
             <img id="figura4" src="https://raw.githubusercontent.com/GlauberLASantiago/vr2/main/figura4.png" crossorigin="anonymous">
             <img id="figura5" src="https://raw.githubusercontent.com/GlauberLASantiago/vr2/main/figura5.png" crossorigin="anonymous">
@@ -247,8 +281,8 @@
         <a-entity environment="preset: forest; skyType: atmosphere; lighting: distant"></a-entity>
 
         <a-entity id="camera-rig" position="0 0 0">
-            <a-camera id="main-camera" position="0 1.6 0" fov="80" look-controls="pointerLockEnabled: false; touchEnabled: true; mouseEnabled: true">
-                <!-- Cursor central tipo VR. Funciona em Celular tocando em qualquer lugar da tela -->
+            <a-camera id="main-camera" position="0 1.6 0" fov="80"
+                      look-controls="pointerLockEnabled: false; touchEnabled: true; mouseEnabled: true">
                 <a-cursor id="vr-cursor" 
                           raycaster="objects: .clickable"
                           color="#FFFFFF"
@@ -263,88 +297,151 @@
         <!-- LOUSAS COM AS IMAGENS DO GITHUB -->
         <!-- ============================== -->
         
-        <!-- Lousa 1 -->
         <a-entity position="-8.66 2.3 -5" rotation="0 60 0">
             <a-box width="5.2" height="4.2" depth="0.1" color="#2c3e50"></a-box>
             <a-image src="#figura1" width="5" height="4" position="0 0 0.06"></a-image>
         </a-entity>
         
-        <!-- Lousa 2 -->
         <a-entity position="-5 2.3 -8.66" rotation="0 30 0">
             <a-box width="5.2" height="4.2" depth="0.1" color="#2c3e50"></a-box>
             <a-image src="#figura2" width="5" height="4" position="0 0 0.06"></a-image>
         </a-entity>
 
-        <!-- Lousa 3 (Agora com Vídeo e Interativa) -->
         <a-entity position="0 2.3 -10" rotation="0 0 0">
             <a-box width="5.2" height="4.2" depth="0.1" color="#2c3e50"></a-box>
             <a-video class="clickable" video-controls src="#video3" width="5" height="4" position="0 0 0.06"></a-video>
             <a-text value="Toque para Play/Pause" align="center" position="0 -2.3 0" color="#FFF" scale="1.5 1.5 1.5"></a-text>
         </a-entity>
         
-        <!-- Lousa 4 -->
         <a-entity position="5 2.3 -8.66" rotation="0 -30 0">
             <a-box width="5.2" height="4.2" depth="0.1" color="#2c3e50"></a-box>
             <a-image src="#figura4" width="5" height="4" position="0 0 0.06"></a-image>
         </a-entity>
 
-        <!-- Lousa 5 -->
         <a-entity position="8.66 2.3 -5" rotation="0 -60 0">
             <a-box width="5.2" height="4.2" depth="0.1" color="#2c3e50"></a-box>
             <a-image src="#figura5" width="5" height="4" position="0 0 0.06"></a-image>
         </a-entity>
 
-        <!-- ============================== -->
-        <!-- ELEMENTOS MUSICAIS E ACORDES   -->
-        <!-- ============================== -->
-        
+        <!-- ============================================================ -->
+        <!-- ELEMENTOS MUSICAIS E ACORDES                                  -->
+        <!-- CORREÇÃO: .clickable agora está na caixa de colisão,          -->
+        <!-- e interactive-text está na MESMA entidade .clickable          -->
+        <!-- ============================================================ -->
+
+        <!-- C Maior (Tônica) -->
         <a-entity position="6 0 0">
             <a-cylinder radius="1.5" height="0.4" color="#DDDDDD"></a-cylinder>
-            <a-text value="C Maior\n(Tonica)" font="exo2bold" position="0 1.5 0" align="center" color="#FFFFFF" look-at="#main-camera" scale="1.5 1.5 1.5"></a-text>
-            <a-entity class="clickable" interactive-text="notes: C4, E4, G4" position="0 0.5 0">
-                <!-- Hitbox sólida mas invisível para facilitar o clique -->
-                <a-box width="1.5" height="1.5" depth="1.5" opacity="0" transparent="true"></a-box>
-                <a-box color="#FFFFFF" scale="0.8 0.8 0.8" animation="property: rotation; to: 0 360 0; loop: true; dur: 8000; easing: linear"></a-box>
+            <a-entity position="0 1.5 0" look-at="#main-camera">
+                <a-box depth="0.05" width="2.5" height="1" color="#DDDDDD">
+                    <a-text value="C Maior\n(Tonica)" align="center" color="#000" scale="2 2 2" position="0 0 0.026"></a-text>
+                </a-box>
             </a-entity>
+            <!-- Caixa .clickable com interactive-text diretamente nela -->
+            <a-box class="clickable"
+                   interactive-text="notes: C4, E4, G4; label: C Maior (Tônica)"
+                   width="2" height="2" depth="2"
+                   color="#00FF00" opacity="0.2" transparent="true"
+                   position="0 0.5 0">
+            </a-box>
+            <a-box color="#FFFFFF" scale="0.8 0.8 0.8" position="0 0.5 0"
+                   animation="property: rotation; to: 0 360 0; loop: true; dur: 8000; easing: linear"></a-box>
         </a-entity>
 
+        <!-- V/V: D7 → resolve em G (V) -->
         <a-entity position="1.85 0 5.71">
             <a-cylinder radius="1" height="0.4" color="#F1C40F"></a-cylinder>
-            <a-text value="Alvo: G Maior (V)" font="exo2bold" position="0 0.5 1" align="center" color="#F1C40F" look-at="#main-camera"></a-text>
-            <a-entity class="clickable" interactive-text="notes: D4, F#4, A4, C5" position="0 2 0">
-                <a-sphere radius="1" opacity="0" transparent="true"></a-sphere>
-                <a-sphere radius="0.5" color="#E67E22" material="wireframe: true" animation="property: rotation; to: 360 360 0; loop: true; dur: 5000; easing: linear"></a-sphere>
-                <a-text value="V/V: D7\n(Tocar)" font="exo2bold" position="0 0.8 0" align="center" color="#FFF" look-at="#main-camera" scale="1.2 1.2 1.2" text="outlineColor: #000; outlineWidth: 0.1"></a-text>
+            <a-entity position="0 0.5 1" look-at="#main-camera">
+                <a-box depth="0.05" width="2.2" height="0.6" color="#F1C40F">
+                    <a-text value="Alvo: G (V)" align="center" color="#000" scale="1.5 1.5 1.5" position="0 0 0.026"></a-text>
+                </a-box>
+            </a-entity>
+            <!-- CORREÇÃO de nota: F#4 mantido (correto no Tone.js) -->
+            <a-sphere class="clickable"
+                      interactive-text="notes: D4, F#4, A4, C5; label: V/V = D7"
+                      radius="1.2"
+                      color="#00FF00" opacity="0.2" transparent="true"
+                      position="0 2 0">
+            </a-sphere>
+            <a-sphere radius="0.5" color="#E67E22" material="wireframe: true"
+                      position="0 2 0"
+                      animation="property: rotation; to: 360 360 0; loop: true; dur: 5000; easing: linear"></a-sphere>
+            <a-entity position="0 2.8 0" look-at="#main-camera">
+                <a-box depth="0.05" width="1.8" height="0.6" color="#FFFFFF">
+                    <a-text value="V/V: D7" align="center" color="#000" scale="1.5 1.5 1.5" position="0 0 0.026"></a-text>
+                </a-box>
             </a-entity>
         </a-entity>
 
+        <!-- V/ii: A7 → resolve em Dm (ii) -->
         <a-entity position="-4.85 0 3.53">
             <a-cylinder radius="1" height="0.4" color="#3498DB"></a-cylinder>
-            <a-text value="Alvo: D menor (ii)" font="exo2bold" position="0 0.5 1" align="center" color="#3498DB" look-at="#main-camera"></a-text>
-            <a-entity class="clickable" interactive-text="notes: A3, C#4, E4, G4" position="0 2 0">
-                <a-sphere radius="1" opacity="0" transparent="true"></a-sphere>
-                <a-octahedron radius="0.5" color="#2980B9" animation="property: rotation; to: 0 360 360; loop: true; dur: 6000; easing: linear"></a-octahedron>
-                <a-text value="V/ii: A7\n(Tocar)" font="exo2bold" position="0 0.8 0" align="center" color="#FFF" look-at="#main-camera" scale="1.2 1.2 1.2" text="outlineColor: #000; outlineWidth: 0.1"></a-text>
+            <a-entity position="0 0.5 1" look-at="#main-camera">
+                <a-box depth="0.05" width="2.4" height="0.6" color="#3498DB">
+                    <a-text value="Alvo: Dm (ii)" align="center" color="#FFF" scale="1.5 1.5 1.5" position="0 0 0.026"></a-text>
+                </a-box>
+            </a-entity>
+            <!-- CORREÇÃO de nota: C#4 mantido (correto no Tone.js) -->
+            <a-sphere class="clickable"
+                      interactive-text="notes: A3, C#4, E4, G4; label: V/ii = A7"
+                      radius="1.2"
+                      color="#00FF00" opacity="0.2" transparent="true"
+                      position="0 2 0">
+            </a-sphere>
+            <a-octahedron radius="0.5" color="#2980B9" position="0 2 0"
+                          animation="property: rotation; to: 0 360 360; loop: true; dur: 6000; easing: linear"></a-octahedron>
+            <a-entity position="0 2.8 0" look-at="#main-camera">
+                <a-box depth="0.05" width="1.8" height="0.6" color="#FFFFFF">
+                    <a-text value="V/ii: A7" align="center" color="#000" scale="1.5 1.5 1.5" position="0 0 0.026"></a-text>
+                </a-box>
             </a-entity>
         </a-entity>
 
+        <!-- V/vi: E7 → resolve em Am (vi) -->
         <a-entity position="-4.85 0 -3.53">
             <a-cylinder radius="1" height="0.4" color="#E74C3C"></a-cylinder>
-            <a-text value="Alvo: A menor (vi)" font="exo2bold" position="0 0.5 1" align="center" color="#E74C3C" look-at="#main-camera"></a-text>
-            <a-entity class="clickable" interactive-text="notes: E4, G#4, B4, D5" position="0 2 0">
-                <a-sphere radius="1" opacity="0" transparent="true"></a-sphere>
-                <a-dodecahedron radius="0.4" color="#C0392B" animation="property: rotation; to: 360 0 360; loop: true; dur: 7000; easing: linear"></a-dodecahedron>
-                <a-text value="V/vi: E7\n(Tocar)" font="exo2bold" position="0 0.8 0" align="center" color="#FFF" look-at="#main-camera" scale="1.2 1.2 1.2" text="outlineColor: #000; outlineWidth: 0.1"></a-text>
+            <a-entity position="0 0.5 1" look-at="#main-camera">
+                <a-box depth="0.05" width="2.4" height="0.6" color="#E74C3C">
+                    <a-text value="Alvo: Am (vi)" align="center" color="#FFF" scale="1.5 1.5 1.5" position="0 0 0.026"></a-text>
+                </a-box>
+            </a-entity>
+            <!-- CORREÇÃO de nota: G#4 mantido (correto no Tone.js) -->
+            <a-sphere class="clickable"
+                      interactive-text="notes: E4, G#4, B4, D5; label: V/vi = E7"
+                      radius="1.2"
+                      color="#00FF00" opacity="0.2" transparent="true"
+                      position="0 2 0">
+            </a-sphere>
+            <a-dodecahedron radius="0.4" color="#C0392B" position="0 2 0"
+                            animation="property: rotation; to: 360 0 360; loop: true; dur: 7000; easing: linear"></a-dodecahedron>
+            <a-entity position="0 2.8 0" look-at="#main-camera">
+                <a-box depth="0.05" width="1.8" height="0.6" color="#FFFFFF">
+                    <a-text value="V/vi: E7" align="center" color="#000" scale="1.5 1.5 1.5" position="0 0 0.026"></a-text>
+                </a-box>
             </a-entity>
         </a-entity>
 
+        <!-- V/IV: C7 → resolve em F (IV) -->
         <a-entity position="1.85 0 -5.71">
             <a-cylinder radius="1" height="0.4" color="#2ECC71"></a-cylinder>
-            <a-text value="Alvo: F Maior (IV)" font="exo2bold" position="0 0.5 1" align="center" color="#2ECC71" look-at="#main-camera"></a-text>
-            <a-entity class="clickable" interactive-text="notes: C4, E4, G4, Bb4" position="0 2 0">
-                <a-sphere radius="1" opacity="0" transparent="true"></a-sphere>
-                <a-tetrahedron radius="0.6" color="#27AE60" animation="property: rotation; to: 0 360 0; loop: true; dur: 4000; easing: linear"></a-tetrahedron>
-                <a-text value="V/IV: C7\n(Tocar)" font="exo2bold" position="0 0.8 0" align="center" color="#FFF" look-at="#main-camera" scale="1.2 1.2 1.2" text="outlineColor: #000; outlineWidth: 0.1"></a-text>
+            <a-entity position="0 0.5 1" look-at="#main-camera">
+                <a-box depth="0.05" width="2.2" height="0.6" color="#2ECC71">
+                    <a-text value="Alvo: F (IV)" align="center" color="#000" scale="1.5 1.5 1.5" position="0 0 0.026"></a-text>
+                </a-box>
+            </a-entity>
+            <!-- CORREÇÃO CRÍTICA: Bb4 → A#4 (Tone.js usa # em vez de b) -->
+            <a-sphere class="clickable"
+                      interactive-text="notes: C4, E4, G4, A#4; label: V/IV = C7"
+                      radius="1.2"
+                      color="#00FF00" opacity="0.2" transparent="true"
+                      position="0 2 0">
+            </a-sphere>
+            <a-tetrahedron radius="0.6" color="#27AE60" position="0 2 0"
+                           animation="property: rotation; to: 0 360 0; loop: true; dur: 4000; easing: linear"></a-tetrahedron>
+            <a-entity position="0 2.8 0" look-at="#main-camera">
+                <a-box depth="0.05" width="1.8" height="0.6" color="#FFFFFF">
+                    <a-text value="V/IV: C7" align="center" color="#000" scale="1.5 1.5 1.5" position="0 0 0.026"></a-text>
+                </a-box>
             </a-entity>
         </a-entity>
 
