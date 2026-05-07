@@ -3,16 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Dominantes Secundárias em WebXR (Com Áudio)</title>
+    <title>Dominantes Secundárias em WebXR (Com Áudio e Lousas)</title>
     
+    <!-- Favicon -->
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎵</text></svg>">
 
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-extras@7.2.0/dist/aframe-extras.min.js"></script>
     <script src="https://unpkg.com/aframe-environment-component@1.3.3/dist/aframe-environment-component.min.js"></script>
     <script src="https://unpkg.com/aframe-look-at-component@0.8.0/dist/aframe-look-at-component.min.js"></script>
-    
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/nipplejs/0.10.1/nipplejs.min.js"></script>
     
     <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
 
@@ -77,82 +76,59 @@
 
         .zoom-controls { display: flex; gap: 5px; }
         .zoom-controls button.hud-btn { width: 40px; }
-
-        .joystick-zone {
-            position: absolute; bottom: 20px; width: 150px; height: 150px; pointer-events: auto;
-        }
-        #joystick-right { right: 20px; }
-
-        #crosshair {
-            position: absolute; top: 50%; left: 50%; width: 10px; height: 10px;
-            background: rgba(255, 255, 255, 0.8); border-radius: 50%;
-            transform: translate(-50%, -50%); pointer-events: none;
-            box-shadow: 0 0 5px rgba(0,0,0,0.5);
-        }
     </style>
 
     <script>
-        // Configuração Global do Tone.js
-        // Usamos AMSynth para um som de piano/teclado elétrico suave
-        const synth = new Tone.PolySynth(Tone.AMSynth).toDestination();
-        synth.volume.value = -5; // Ajusta o volume geral
+        let synth; // O sintetizador será criado somente após o usuário clicar em "Entrar"
 
-        // Componente: Textos e Acordes Interativos
-        AFRAME.registerComponent('interactive-text', {
-            schema: {
-                notes: { type: 'string', default: 'C4, E4, G4' } // Recebe as notas em string
-            },
+        // Componente: Controle de Vídeo (Play/Pause ao clicar)
+        AFRAME.registerComponent('video-controls', {
             init: function () {
-                this.el.addEventListener('click', () => {
-                    // Toca o acorde extraindo as notas da propriedade
-                    const chordArray = this.data.notes.split(',').map(n => n.trim());
-                    
-                    // Dispara o som (Duração de 2 segundos)
-                    if (Tone.context.state === 'running') {
-                        synth.triggerAttackRelease(chordArray, "2n");
-                    }
-
-                    // Animação visual de feedback
-                    this.el.setAttribute('animation__scale', 'property: scale; to: 1.3 1.3 1.3; dur: 150; easing: easeOutQuad; dir: alternate; loop: 1');
-                    
-                    // Piscar cor (se for uma geometria)
-                    const mesh = this.el.querySelector('*[color]');
-                    if(mesh) {
-                        const originalColor = mesh.getAttribute('color');
-                        mesh.setAttribute('color', '#FFFFFF');
-                        setTimeout(() => mesh.setAttribute('color', originalColor), 150);
+                this.el.addEventListener('mousedown', () => {
+                    const videoSrc = this.el.getAttribute('src');
+                    const video = document.querySelector(videoSrc);
+                    if (!video) return;
+                    if (video.paused) {
+                        video.play();
+                    } else {
+                        video.pause();
                     }
                 });
             }
         });
 
-        // Componente: Look Joystick (Apenas rotação, câmera fixa no centro)
-        AFRAME.registerComponent('look-joystick', {
-            init: function() {
-                this.lookVector = { x: 0, y: 0 };
-                this.camera = document.querySelector('#main-camera');
-                const rightZone = document.getElementById('joystick-right');
-
-                this.managerRight = nipplejs.create({
-                    zone: rightZone, mode: 'static', position: { left: '50%', top: '50%' }, color: '#e24a4a'
-                });
-
-                this.managerRight.on('move', (e, data) => {
-                    this.lookVector.x = data.vector.x; this.lookVector.y = data.vector.y;
-                }).on('end', () => { this.lookVector = { x: 0, y: 0 }; });
+        // Componente: Textos e Acordes Interativos
+        AFRAME.registerComponent('interactive-text', {
+            schema: {
+                notes: { type: 'string', default: 'C4, E4, G4' }
             },
-            tick: function(time, timeDelta) {
-                if(!this.camera) return;
-                if (this.lookVector.x !== 0 || this.lookVector.y !== 0) {
-                    const lookSpeed = 0.04;
-                    const lookControls = this.camera.components['look-controls'];
-                    if (lookControls) {
-                        lookControls.yawObject.rotation.y -= this.lookVector.x * lookSpeed;
-                        lookControls.pitchObject.rotation.x -= this.lookVector.y * lookSpeed;
-                        const maxPitch = Math.PI / 2;
-                        lookControls.pitchObject.rotation.x = Math.max(-maxPitch, Math.min(maxPitch, lookControls.pitchObject.rotation.x));
+            init: function () {
+                // Usar 'mousedown' responde mais rápido que 'click', perfeito para toque e mouse
+                this.el.addEventListener('mousedown', async () => {
+                    if (!synth) return; // Segurança caso clique antes de iniciar
+                    
+                    // Garante que o contexto de áudio esteja rodando (vital para Safari/iOS)
+                    if (Tone.context.state !== 'running') {
+                        await Tone.start();
                     }
-                }
+
+                    // Extrai as notas (Ex: ["C4", "E4", "G4"])
+                    const chordArray = this.data.notes.split(',').map(n => n.trim());
+                    
+                    // Dispara o acorde
+                    synth.triggerAttackRelease(chordArray, "2n");
+
+                    // Animação visual de feedback (pulo da geometria)
+                    this.el.setAttribute('animation__scale', 'property: scale; to: 1.3 1.3 1.3; dur: 150; easing: easeOutQuad; dir: alternate; loop: 1');
+                    
+                    // Piscar cor apenas das malhas visíveis (ignorando hitboxes invisíveis)
+                    const meshes = this.el.querySelectorAll('*[color]');
+                    meshes.forEach(mesh => {
+                        const originalColor = mesh.getAttribute('color');
+                        mesh.setAttribute('color', '#FFFFFF');
+                        setTimeout(() => mesh.setAttribute('color', originalColor), 150);
+                    });
+                });
             }
         });
 
@@ -161,9 +137,15 @@
             const loader = document.getElementById('loading-screen');
             
             document.getElementById('btn-start-scene').addEventListener('click', async () => {
-                // Inicia o contexto de Áudio do Tone.js (Obrigatório por segurança dos browsers)
+                // 1. Inicia o contexto de Áudio do Tone.js obrigatório pelo browser
                 await Tone.start();
                 console.log('Tone.js Audio Context started');
+
+                // 2. Cria o Sintetizador SOMENTE após a permissão do usuário
+                if (!synth) {
+                    synth = new Tone.PolySynth(Tone.Synth).toDestination();
+                    synth.volume.value = 0; // Volume normalizado
+                }
 
                 // Solicita permissão para os sensores de movimento no iOS 13+
                 if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
@@ -172,7 +154,11 @@
                     } catch (error) { console.error('Erro de giroscópio:', error); }
                 }
 
-                // Esconde a tela
+                // Inicia o vídeo após a interação do usuário (Exigência dos navegadores)
+                const videoEl = document.getElementById('video3');
+                if (videoEl) videoEl.play().catch(e => console.log("Play automático bloqueado:", e));
+
+                // Esconde a tela de loading
                 loader.style.opacity = '0';
                 setTimeout(() => loader.style.display = 'none', 500);
             });
@@ -183,9 +169,19 @@
             const cam = document.querySelector('#main-camera');
             let isNight = false; let isMap = false;
 
+            // Lista de cenários disponíveis
+            const presets = ['forest', 'egypt', 'tron', 'japan', 'volcano', 'moon', 'osiris', 'arches'];
+            let currentPresetIndex = 0;
+
+            document.getElementById('btn-scenario').addEventListener('click', () => {
+                currentPresetIndex = (currentPresetIndex + 1) % presets.length;
+                env.setAttribute('environment', `preset: ${presets[currentPresetIndex]}`);
+                isNight = false; // Volta ao modo claro sempre que muda de cenário
+            });
+
             document.getElementById('btn-theme').addEventListener('click', () => {
                 isNight = !isNight;
-                env.setAttribute('environment', `preset: ${isNight ? 'starry' : 'forest'}`);
+                env.setAttribute('environment', `preset: ${isNight ? 'starry' : presets[currentPresetIndex]}`);
             });
 
             document.getElementById('btn-map').addEventListener('click', () => {
@@ -226,6 +222,7 @@
         </div>
 
         <div class="controls-panel">
+            <button id="btn-scenario" class="hud-btn">🏞️ Mudar Cenário</button>
             <button id="btn-theme" class="hud-btn">🌙 Dia/Noite</button>
             <button id="btn-map" class="hud-btn">🗺️ Visão Mapa</button>
             <div class="zoom-controls">
@@ -233,25 +230,80 @@
                 <button id="btn-zoom-out" class="hud-btn">🔍-</button>
             </div>
         </div>
-
-        <div id="crosshair"></div>
-
-        <div id="joystick-right" class="joystick-zone"></div>
     </div>
 
-    <a-scene cursor="rayOrigin: mouse" raycaster="objects: .clickable" look-joystick>
+    <!-- REMOVIDO cursor rayOrigin. Agora a mira está na Câmera! -->
+    <a-scene>
         
+        <a-assets>
+            <img id="figura1" src="https://raw.githubusercontent.com/GlauberLASantiago/vr2/main/figura1.png" crossorigin="anonymous">
+            <img id="figura2" src="https://raw.githubusercontent.com/GlauberLASantiago/vr2/main/figura2.png" crossorigin="anonymous">
+            <!-- Substituímos a figura 3 por um elemento de vídeo -->
+            <video id="video3" src="https://raw.githubusercontent.com/GlauberLASantiago/vr2/main/VideoPergunta05.mp4" crossorigin="anonymous" loop="true" playsinline webkit-playsinline></video>
+            <img id="figura4" src="https://raw.githubusercontent.com/GlauberLASantiago/vr2/main/figura4.png" crossorigin="anonymous">
+            <img id="figura5" src="https://raw.githubusercontent.com/GlauberLASantiago/vr2/main/figura5.png" crossorigin="anonymous">
+        </a-assets>
+
         <a-entity environment="preset: forest; skyType: atmosphere; lighting: distant"></a-entity>
 
         <a-entity id="camera-rig" position="0 0 0">
-            <a-camera id="main-camera" position="0 1.6 0" fov="80" look-controls="touchEnabled: false; mouseEnabled: false"></a-camera>
+            <a-camera id="main-camera" position="0 1.6 0" fov="80" look-controls="pointerLockEnabled: false; touchEnabled: true; mouseEnabled: true">
+                <!-- Cursor central tipo VR. Funciona em Celular tocando em qualquer lugar da tela -->
+                <a-cursor id="vr-cursor" 
+                          raycaster="objects: .clickable"
+                          color="#FFFFFF"
+                          position="0 0 -1"
+                          geometry="primitive: ring; radiusInner: 0.015; radiusOuter: 0.025"
+                          animation__click="property: scale; startEvents: click; easing: easeInCubic; dur: 150; from: 0.1 0.1 0.1; to: 1 1 1">
+                </a-cursor>
+            </a-camera>
         </a-entity>
 
+        <!-- ============================== -->
+        <!-- LOUSAS COM AS IMAGENS DO GITHUB -->
+        <!-- ============================== -->
+        
+        <!-- Lousa 1 -->
+        <a-entity position="-8.66 2.3 -5" rotation="0 60 0">
+            <a-box width="5.2" height="4.2" depth="0.1" color="#2c3e50"></a-box>
+            <a-image src="#figura1" width="5" height="4" position="0 0 0.06"></a-image>
+        </a-entity>
+        
+        <!-- Lousa 2 -->
+        <a-entity position="-5 2.3 -8.66" rotation="0 30 0">
+            <a-box width="5.2" height="4.2" depth="0.1" color="#2c3e50"></a-box>
+            <a-image src="#figura2" width="5" height="4" position="0 0 0.06"></a-image>
+        </a-entity>
+
+        <!-- Lousa 3 (Agora com Vídeo e Interativa) -->
+        <a-entity position="0 2.3 -10" rotation="0 0 0">
+            <a-box width="5.2" height="4.2" depth="0.1" color="#2c3e50"></a-box>
+            <a-video class="clickable" video-controls src="#video3" width="5" height="4" position="0 0 0.06"></a-video>
+            <a-text value="Toque para Play/Pause" align="center" position="0 -2.3 0" color="#FFF" scale="1.5 1.5 1.5"></a-text>
+        </a-entity>
+        
+        <!-- Lousa 4 -->
+        <a-entity position="5 2.3 -8.66" rotation="0 -30 0">
+            <a-box width="5.2" height="4.2" depth="0.1" color="#2c3e50"></a-box>
+            <a-image src="#figura4" width="5" height="4" position="0 0 0.06"></a-image>
+        </a-entity>
+
+        <!-- Lousa 5 -->
+        <a-entity position="8.66 2.3 -5" rotation="0 -60 0">
+            <a-box width="5.2" height="4.2" depth="0.1" color="#2c3e50"></a-box>
+            <a-image src="#figura5" width="5" height="4" position="0 0 0.06"></a-image>
+        </a-entity>
+
+        <!-- ============================== -->
+        <!-- ELEMENTOS MUSICAIS E ACORDES   -->
+        <!-- ============================== -->
+        
         <a-entity position="6 0 0">
             <a-cylinder radius="1.5" height="0.4" color="#DDDDDD"></a-cylinder>
             <a-text value="C Maior\n(Tônica)" font="exo2bold" position="0 1.5 0" align="center" color="#FFFFFF" look-at="#main-camera" scale="1.5 1.5 1.5"></a-text>
-            
             <a-entity class="clickable" interactive-text="notes: C4, E4, G4" position="0 0.5 0">
+                <!-- Hitbox sólida mas invisível para facilitar o clique -->
+                <a-box width="1.5" height="1.5" depth="1.5" opacity="0" transparent="true"></a-box>
                 <a-box color="#FFFFFF" scale="0.8 0.8 0.8" animation="property: rotation; to: 0 360 0; loop: true; dur: 8000; easing: linear"></a-box>
             </a-entity>
         </a-entity>
@@ -259,8 +311,8 @@
         <a-entity position="1.85 0 5.71">
             <a-cylinder radius="1" height="0.4" color="#F1C40F"></a-cylinder>
             <a-text value="Alvo: G Maior (V)" font="exo2bold" position="0 0.5 1" align="center" color="#F1C40F" look-at="#main-camera"></a-text>
-            
             <a-entity class="clickable" interactive-text="notes: D4, F#4, A4, C5" position="0 2 0">
+                <a-sphere radius="1" opacity="0" transparent="true"></a-sphere>
                 <a-sphere radius="0.5" color="#E67E22" material="wireframe: true" animation="property: rotation; to: 360 360 0; loop: true; dur: 5000; easing: linear"></a-sphere>
                 <a-text value="V/V: D7\n(Tocar)" font="exo2bold" position="0 0.8 0" align="center" color="#FFF" look-at="#main-camera" scale="1.2 1.2 1.2" text="outlineColor: #000; outlineWidth: 0.1"></a-text>
             </a-entity>
@@ -269,8 +321,8 @@
         <a-entity position="-4.85 0 3.53">
             <a-cylinder radius="1" height="0.4" color="#3498DB"></a-cylinder>
             <a-text value="Alvo: D menor (ii)" font="exo2bold" position="0 0.5 1" align="center" color="#3498DB" look-at="#main-camera"></a-text>
-            
             <a-entity class="clickable" interactive-text="notes: A3, C#4, E4, G4" position="0 2 0">
+                <a-sphere radius="1" opacity="0" transparent="true"></a-sphere>
                 <a-octahedron radius="0.5" color="#2980B9" animation="property: rotation; to: 0 360 360; loop: true; dur: 6000; easing: linear"></a-octahedron>
                 <a-text value="V/ii: A7\n(Tocar)" font="exo2bold" position="0 0.8 0" align="center" color="#FFF" look-at="#main-camera" scale="1.2 1.2 1.2" text="outlineColor: #000; outlineWidth: 0.1"></a-text>
             </a-entity>
@@ -279,8 +331,8 @@
         <a-entity position="-4.85 0 -3.53">
             <a-cylinder radius="1" height="0.4" color="#E74C3C"></a-cylinder>
             <a-text value="Alvo: A menor (vi)" font="exo2bold" position="0 0.5 1" align="center" color="#E74C3C" look-at="#main-camera"></a-text>
-            
             <a-entity class="clickable" interactive-text="notes: E4, G#4, B4, D5" position="0 2 0">
+                <a-sphere radius="1" opacity="0" transparent="true"></a-sphere>
                 <a-dodecahedron radius="0.4" color="#C0392B" animation="property: rotation; to: 360 0 360; loop: true; dur: 7000; easing: linear"></a-dodecahedron>
                 <a-text value="V/vi: E7\n(Tocar)" font="exo2bold" position="0 0.8 0" align="center" color="#FFF" look-at="#main-camera" scale="1.2 1.2 1.2" text="outlineColor: #000; outlineWidth: 0.1"></a-text>
             </a-entity>
@@ -289,8 +341,8 @@
         <a-entity position="1.85 0 -5.71">
             <a-cylinder radius="1" height="0.4" color="#2ECC71"></a-cylinder>
             <a-text value="Alvo: F Maior (IV)" font="exo2bold" position="0 0.5 1" align="center" color="#2ECC71" look-at="#main-camera"></a-text>
-            
             <a-entity class="clickable" interactive-text="notes: C4, E4, G4, Bb4" position="0 2 0">
+                <a-sphere radius="1" opacity="0" transparent="true"></a-sphere>
                 <a-tetrahedron radius="0.6" color="#27AE60" animation="property: rotation; to: 0 360 0; loop: true; dur: 4000; easing: linear"></a-tetrahedron>
                 <a-text value="V/IV: C7\n(Tocar)" font="exo2bold" position="0 0.8 0" align="center" color="#FFF" look-at="#main-camera" scale="1.2 1.2 1.2" text="outlineColor: #000; outlineWidth: 0.1"></a-text>
             </a-entity>
