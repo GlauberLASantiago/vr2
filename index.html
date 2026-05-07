@@ -70,10 +70,28 @@
             color: white; border-radius: 8px; padding: 12px; cursor: pointer;
             backdrop-filter: blur(5px); font-weight: bold; transition: background 0.3s;
         }
-        button.hud-btn:hover { background: rgba(74, 144, 226, 0.5); }
+        button.hud-btn:hover, button.hud-btn:focus { background: rgba(74, 144, 226, 0.5); outline: none; }
 
         .zoom-controls { display: flex; gap: 5px; }
         .zoom-controls button.hud-btn { width: 40px; }
+
+        /* Botão de controle do vídeo */
+        #video-controls-hud {
+            position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%);
+            display: flex; gap: 10px; pointer-events: auto; z-index: 1001;
+        }
+
+        .video-btn {
+            background: var(--bg-glass); border: 1px solid rgba(255,255,255,0.3);
+            color: white; border-radius: 50px; padding: 10px 22px;
+            cursor: pointer; backdrop-filter: blur(5px);
+            font-size: 1rem; font-weight: bold;
+            transition: background 0.2s, transform 0.1s;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .video-btn:active { transform: scale(0.93); }
+        .video-btn.playing { background: rgba(231, 76, 60, 0.7); border-color: rgba(231,76,60,0.6); }
+        .video-btn.stopped { background: rgba(46, 204, 113, 0.7); border-color: rgba(46,204,113,0.6); }
 
         /* Feedback visual de acorde tocado */
         #chord-feedback {
@@ -88,21 +106,53 @@
 
     <script>
         // ============================================================
-        // CORREÇÃO 1: Synth criado de forma lazy (só após interação)
+        // ÁUDIO: inicialização segura depois de uma interação do usuário
         // ============================================================
         let synth = null;
         let audioReady = false;
+        let audioInitPromise = null;
+
+        const FLAT_TO_SHARP = {
+            'Cb': 'B',  'Db': 'C#', 'Eb': 'D#', 'Fb': 'E',
+            'Gb': 'F#', 'Ab': 'G#', 'Bb': 'A#'
+        };
+
+        function normalizeNote(note) {
+            return String(note || '').trim().replace(/^([A-G]b)(-?\d)$/i, (match, pitch, octave) => {
+                const normalizedPitch = FLAT_TO_SHARP[pitch[0].toUpperCase() + 'b'];
+                return normalizedPitch ? `${normalizedPitch}${octave}` : match;
+            });
+        }
 
         async function initAudio() {
-            if (audioReady) return;
-            await Tone.start();
-            synth = new Tone.PolySynth(Tone.Synth, {
-                oscillator: { type: 'triangle' },
-                envelope: { attack: 0.05, decay: 0.3, sustain: 0.4, release: 1.5 }
-            }).toDestination();
-            synth.volume.value = 0;
-            audioReady = true;
-            console.log('Tone.js pronto. Estado do contexto:', Tone.context.state);
+            if (audioReady && synth) return synth;
+            if (audioInitPromise) return audioInitPromise;
+
+            audioInitPromise = (async () => {
+                if (!window.Tone) {
+                    throw new Error('Tone.js não foi carregado. Verifique a conexão com a internet ou o CDN.');
+                }
+
+                await Tone.start();
+
+                synth = new Tone.PolySynth(Tone.Synth, {
+                    oscillator: { type: 'triangle' },
+                    envelope: { attack: 0.03, decay: 0.25, sustain: 0.45, release: 1.2 }
+                }).toDestination();
+
+                synth.volume.value = -4;
+                audioReady = true;
+                console.log('Tone.js pronto. Estado do contexto:', Tone.context.state);
+                return synth;
+            })().catch((err) => {
+                audioInitPromise = null;
+                audioReady = false;
+                console.error('Falha ao inicializar áudio:', err);
+                showChordFeedback('Toque novamente para ativar o áudio');
+                throw err;
+            });
+
+            return audioInitPromise;
         }
 
         function showChordFeedback(label) {
@@ -114,24 +164,45 @@
             el._timer = setTimeout(() => el.classList.remove('visible'), 2000);
         }
 
+        async function safePlayVideo(video) {
+            if (!video) return;
+            try {
+                await video.play();
+            } catch (err) {
+                console.warn('O navegador bloqueou o vídeo até uma interação válida:', err);
+                showChordFeedback('Toque no botão Play novamente');
+            }
+        }
+
+        function stopVideo(video) {
+            if (!video) return;
+            video.pause();
+            try { video.currentTime = 0; } catch (err) { console.warn('Não foi possível reiniciar o vídeo:', err); }
+        }
+
         // ============================================================
-        // Componente: Controle de Vídeo
+        // Componente: Controle de Vídeo na lousa 3D
         // ============================================================
         AFRAME.registerComponent('video-controls', {
             init: function () {
-                this.el.addEventListener('mousedown', () => {
-                    const videoSrc = this.el.getAttribute('src');
-                    const video = document.querySelector(videoSrc);
-                    if (!video) return;
-                    video.paused ? video.play() : video.pause();
+                this.el.addEventListener('click', async () => {
+                    const selector = this.el.getAttribute('src');
+                    const video = selector ? document.querySelector(selector) : null;
+                    if (!video) {
+                        console.warn('Vídeo não encontrado para o seletor:', selector);
+                        return;
+                    }
+                    if (video.paused) {
+                        await safePlayVideo(video);
+                    } else {
+                        video.pause();
+                    }
                 });
             }
         });
 
         // ============================================================
-        // CORREÇÃO 2: interactive-text agora escuta 'click' na entidade
-        // com .clickable E dispara áudio com synth lazy
-        // CORREÇÃO 3: Notas corrigidas (Bb4 → A#4, F#4 mantido)
+        // Componente: Acordes clicáveis
         // ============================================================
         AFRAME.registerComponent('interactive-text', {
             schema: {
@@ -139,106 +210,176 @@
                 label: { type: 'string', default: '' }
             },
             init: function () {
-                // Escuta no próprio elemento (que tem a classe .clickable)
-                this.el.addEventListener('click', async (evt) => {
-                    console.log('Clique detectado! Notas:', this.data.notes);
+                this.el.addEventListener('click', async () => {
+                    const chordArray = this.data.notes
+                        .split(',')
+                        .map(normalizeNote)
+                        .filter(Boolean);
 
-                    // Garante que o áudio está inicializado
-                    await initAudio();
-
-                    if (!synth) {
-                        console.error('Synth não inicializado!');
+                    if (!chordArray.length) {
+                        console.warn('Nenhuma nota válida encontrada em:', this.data.notes);
                         return;
                     }
 
-                    // Parse das notas (suporte a vírgula e espaço)
-                    const chordArray = this.data.notes
-                        .split(',')
-                        .map(n => n.trim())
-                        .filter(n => n.length > 0);
-
-                    console.log('Tocando acorde:', chordArray);
-
                     try {
-                        // Usa triggerAttackRelease com tempo atual do Tone
-                        synth.triggerAttackRelease(chordArray, '1n', Tone.now());
+                        const activeSynth = await initAudio();
+                        activeSynth.triggerAttackRelease(chordArray, '1n', Tone.now());
+                        showChordFeedback(this.data.label || chordArray.join(' - '));
+
+                        this.el.removeAttribute('animation__scale');
+                        this.el.setAttribute('animation__scale', {
+                            property: 'scale',
+                            from: '1 1 1',
+                            to: '1.25 1.25 1.25',
+                            dur: 140,
+                            easing: 'easeOutQuad',
+                            dir: 'alternate',
+                            loop: 1
+                        });
                     } catch (err) {
                         console.error('Erro ao tocar acorde:', err);
                     }
-
-                    // Feedback visual na tela
-                    showChordFeedback(this.data.label || chordArray.join(' - '));
-
-                    // Animação de escala no elemento clicado
-                    this.el.setAttribute('animation__scale',
-                        'property: scale; to: 1.3 1.3 1.3; dur: 150; easing: easeOutQuad; dir: alternate; loop: 1');
                 });
             }
         });
 
         // ============================================================
-        // Lógica de UI e Start
+        // Interface / HUD
         // ============================================================
-        window.onload = () => {
+        document.addEventListener('DOMContentLoaded', () => {
             const loader = document.getElementById('loading-screen');
-            
-            document.getElementById('btn-start-scene').addEventListener('click', async () => {
-                await initAudio();
-                console.log('Áudio ativado com sucesso!');
-
-                if (typeof DeviceOrientationEvent !== 'undefined' &&
-                    typeof DeviceOrientationEvent.requestPermission === 'function') {
-                    try {
-                        await DeviceOrientationEvent.requestPermission();
-                    } catch (error) { console.error('Erro de giroscópio:', error); }
-                }
-
-                loader.style.opacity = '0';
-                setTimeout(() => loader.style.display = 'none', 500);
-            });
-
+            const btnStart = document.getElementById('btn-start-scene');
             const env = document.querySelector('[environment]');
             const rig = document.querySelector('#camera-rig');
             const cam = document.querySelector('#main-camera');
+            const scene = document.querySelector('a-scene');
+            const video = document.getElementById('video3');
+            const btnVideo = document.getElementById('btn-video-play');
+
+            if (scene) {
+                scene.addEventListener('loaded', () => console.log('Cena A-Frame carregada.'));
+                scene.addEventListener('enter-vr', () => showChordFeedback('Modo VR ativado'));
+                scene.addEventListener('exit-vr', () => showChordFeedback('Modo VR encerrado'));
+            }
+
+            if (video) {
+                video.preload = 'metadata';
+                video.setAttribute('playsinline', '');
+                video.setAttribute('webkit-playsinline', '');
+            }
+
+            if (btnStart) {
+                btnStart.addEventListener('click', async () => {
+                    try {
+                        await initAudio();
+                    } catch (err) {
+                        console.warn('Áudio ainda não foi ativado:', err);
+                    }
+
+                    if (typeof DeviceOrientationEvent !== 'undefined' &&
+                        typeof DeviceOrientationEvent.requestPermission === 'function') {
+                        try {
+                            await DeviceOrientationEvent.requestPermission();
+                        } catch (error) {
+                            console.warn('Permissão de giroscópio negada ou indisponível:', error);
+                        }
+                    }
+
+                    if (loader) {
+                        loader.style.opacity = '0';
+                        setTimeout(() => { loader.style.display = 'none'; }, 500);
+                    }
+                }, { once: true });
+            }
+
             let isNight = false;
             let isMap = false;
-
             const presets = ['forest', 'egypt', 'tron', 'japan', 'volcano', 'moon', 'osiris', 'arches'];
             let currentPresetIndex = 0;
 
-            document.getElementById('btn-scenario').addEventListener('click', () => {
-                currentPresetIndex = (currentPresetIndex + 1) % presets.length;
-                env.setAttribute('environment', `preset: ${presets[currentPresetIndex]}`);
-                isNight = false;
-            });
+            const btnScenario = document.getElementById('btn-scenario');
+            if (btnScenario && env) {
+                btnScenario.addEventListener('click', () => {
+                    currentPresetIndex = (currentPresetIndex + 1) % presets.length;
+                    env.setAttribute('environment', `preset: ${presets[currentPresetIndex]}; skyType: atmosphere; lighting: distant`);
+                    isNight = false;
+                });
+            }
 
-            document.getElementById('btn-theme').addEventListener('click', () => {
-                isNight = !isNight;
-                env.setAttribute('environment', `preset: ${isNight ? 'starry' : presets[currentPresetIndex]}`);
-            });
+            const btnTheme = document.getElementById('btn-theme');
+            if (btnTheme && env) {
+                btnTheme.addEventListener('click', () => {
+                    isNight = !isNight;
+                    const preset = isNight ? 'starry' : presets[currentPresetIndex];
+                    env.setAttribute('environment', `preset: ${preset}; skyType: atmosphere; lighting: distant`);
+                });
+            }
 
-            document.getElementById('btn-map').addEventListener('click', () => {
-                isMap = !isMap;
-                const lookControls = cam.components['look-controls'];
-                if (isMap) {
-                    rig.setAttribute('animation__y', 'property: position; to: 0 12 0; dur: 1000; easing: easeInOutQuad');
-                    if (lookControls) lookControls.pitchObject.rotation.x = -Math.PI / 4;
+            const btnMap = document.getElementById('btn-map');
+            if (btnMap && rig && cam) {
+                btnMap.addEventListener('click', () => {
+                    isMap = !isMap;
+                    rig.setAttribute('animation__map', {
+                        property: 'position',
+                        to: isMap ? '0 12 0' : '0 0 0',
+                        dur: 1000,
+                        easing: 'easeInOutQuad'
+                    });
+
+                    const lookControls = cam.components && cam.components['look-controls'];
+                    if (lookControls && lookControls.pitchObject) {
+                        lookControls.pitchObject.rotation.x = isMap ? -Math.PI / 4 : 0;
+                    }
+                    showChordFeedback(isMap ? 'Visão mapa' : 'Visão normal');
+                });
+            }
+
+            const btnZoomIn = document.getElementById('btn-zoom-in');
+            if (btnZoomIn && cam) {
+                btnZoomIn.addEventListener('click', () => {
+                    const fov = Number(cam.getAttribute('fov')) || 80;
+                    cam.setAttribute('fov', Math.max(30, fov - 10));
+                });
+            }
+
+            const btnZoomOut = document.getElementById('btn-zoom-out');
+            if (btnZoomOut && cam) {
+                btnZoomOut.addEventListener('click', () => {
+                    const fov = Number(cam.getAttribute('fov')) || 80;
+                    cam.setAttribute('fov', Math.min(110, fov + 10));
+                });
+            }
+
+            function updateVideoBtn() {
+                if (!btnVideo || !video) return;
+                if (video.paused || video.ended) {
+                    btnVideo.innerHTML = '&#9654; Play Vídeo';
+                    btnVideo.classList.remove('playing');
+                    btnVideo.classList.add('stopped');
                 } else {
-                    rig.setAttribute('animation__y', 'property: position; to: 0 0 0; dur: 1000; easing: easeInOutQuad');
-                    if (lookControls) lookControls.pitchObject.rotation.x = 0;
+                    btnVideo.innerHTML = '&#10074;&#10074; Pausar Vídeo';
+                    btnVideo.classList.remove('stopped');
+                    btnVideo.classList.add('playing');
                 }
-            });
+            }
 
-            document.getElementById('btn-zoom-in').addEventListener('click', () => {
-                let fov = parseInt(cam.getAttribute('fov')) || 80;
-                if (fov > 30) cam.setAttribute('fov', fov - 10);
-            });
+            if (btnVideo && video) {
+                btnVideo.addEventListener('click', async () => {
+                    if (video.paused || video.ended) {
+                        await safePlayVideo(video);
+                    } else {
+                        stopVideo(video);
+                    }
+                    updateVideoBtn();
+                });
 
-            document.getElementById('btn-zoom-out').addEventListener('click', () => {
-                let fov = parseInt(cam.getAttribute('fov')) || 80;
-                if (fov < 110) cam.setAttribute('fov', fov + 10);
-            });
-        };
+                video.addEventListener('play', updateVideoBtn);
+                video.addEventListener('pause', updateVideoBtn);
+                video.addEventListener('ended', updateVideoBtn);
+                video.addEventListener('error', () => showChordFeedback('Erro ao carregar vídeo'));
+                updateVideoBtn();
+            }
+        });
     </script>
 </head>
 <body>
@@ -251,7 +392,7 @@
 
     <div id="hud-container">
         <div class="top-bar">
-            <h1>Dominantes Secundárias em Dó</h1>
+            <h1>Acordes Cromáticos em Dó</h1>
         </div>
 
         <div class="controls-panel">
@@ -265,15 +406,20 @@
         </div>
     </div>
 
+    <!-- Controles do Vídeo -->
+    <div id="video-controls-hud">
+        <button id="btn-video-play" class="video-btn stopped">&#9654; Play Vídeo</button>
+    </div>
+
     <!-- Feedback de acorde tocado -->
     <div id="chord-feedback"></div>
 
-    <a-scene>
+    <a-scene renderer="colorManagement: true; physicallyCorrectLights: true" loading-screen="enabled: false">
         
-        <a-assets>
+        <a-assets timeout="10000">
             <img id="figura1" src="https://raw.githubusercontent.com/GlauberLASantiago/vr2/main/figura1.png" crossorigin="anonymous">
             <img id="figura2" src="https://raw.githubusercontent.com/GlauberLASantiago/vr2/main/figura2.png" crossorigin="anonymous">
-            <video id="video3" src="https://raw.githubusercontent.com/GlauberLASantiago/vr2/main/VideoPergunta05.mp4" crossorigin="anonymous" loop="true" playsinline webkit-playsinline></video>
+            <video id="video3" src="https://raw.githubusercontent.com/GlauberLASantiago/vr2/main/VideoPergunta05.mp4" crossorigin="anonymous" loop="true" preload="metadata" playsinline webkit-playsinline></video>
             <img id="figura4" src="https://raw.githubusercontent.com/GlauberLASantiago/vr2/main/figura4.png" crossorigin="anonymous">
             <img id="figura5" src="https://raw.githubusercontent.com/GlauberLASantiago/vr2/main/figura5.png" crossorigin="anonymous">
         </a-assets>
@@ -282,9 +428,13 @@
 
         <a-entity id="camera-rig" position="0 0 0">
             <a-camera id="main-camera" position="0 1.6 0" fov="80"
-                      look-controls="pointerLockEnabled: false; touchEnabled: true; mouseEnabled: true">
-                <a-cursor id="vr-cursor" 
-                          raycaster="objects: .clickable"
+                      look-controls="pointerLockEnabled: false; touchEnabled: true; mouseEnabled: true"
+                      wasd-controls="acceleration: 40"
+                      cursor="rayOrigin: mouse; fuse: false"
+                      raycaster="objects: .clickable; far: 100">
+                <a-cursor id="vr-cursor"
+                          cursor="rayOrigin: entity; fuse: false"
+                          raycaster="objects: .clickable; far: 100"
                           color="#FFFFFF"
                           position="0 0 -1"
                           geometry="primitive: ring; radiusInner: 0.015; radiusOuter: 0.025"
@@ -325,21 +475,23 @@
 
         <!-- ============================================================ -->
         <!-- ELEMENTOS MUSICAIS E ACORDES                                  -->
-        <!-- CORREÇÃO: .clickable agora está na caixa de colisão,          -->
-        <!-- e interactive-text está na MESMA entidade .clickable          -->
+        <!-- Acordes atualizados conforme solicitação:                      -->
+        <!-- G7, Bm7(b5), Bdim7, G7sus4 e Db7                              -->
+        <!-- As notas com bemol foram escritas de forma enarmônica          -->
+        <!-- para máxima compatibilidade com Tone.js.                       -->
         <!-- ============================================================ -->
 
-        <!-- C Maior (Tônica) -->
+        <!-- G7 (V7) -->
         <a-entity position="6 0 0">
             <a-cylinder radius="1.5" height="0.4" color="#DDDDDD"></a-cylinder>
             <a-entity position="0 1.5 0" look-at="#main-camera">
                 <a-box depth="0.05" width="2.5" height="1" color="#DDDDDD">
-                    <a-text value="C Maior\n(Tonica)" align="center" color="#000" scale="2 2 2" position="0 0 0.026"></a-text>
+                    <a-text value="G7
+(V7)" align="center" color="#000" scale="2 2 2" position="0 0 0.026"></a-text>
                 </a-box>
             </a-entity>
-            <!-- Caixa .clickable com interactive-text diretamente nela -->
             <a-box class="clickable"
-                   interactive-text="notes: C4, E4, G4; label: C Maior (Tônica)"
+                   interactive-text="notes: G3, B3, D4, F4; label: G7 (V7)"
                    width="2" height="2" depth="2"
                    color="#00FF00" opacity="0.2" transparent="true"
                    position="0 0.5 0">
@@ -348,17 +500,16 @@
                    animation="property: rotation; to: 0 360 0; loop: true; dur: 8000; easing: linear"></a-box>
         </a-entity>
 
-        <!-- V/V: D7 → resolve em G (V) -->
+        <!-- Bm7(b5) (VIIm7b5) -->
         <a-entity position="1.85 0 5.71">
             <a-cylinder radius="1" height="0.4" color="#F1C40F"></a-cylinder>
             <a-entity position="0 0.5 1" look-at="#main-camera">
-                <a-box depth="0.05" width="2.2" height="0.6" color="#F1C40F">
-                    <a-text value="Alvo: G (V)" align="center" color="#000" scale="1.5 1.5 1.5" position="0 0 0.026"></a-text>
+                <a-box depth="0.05" width="2.4" height="0.6" color="#F1C40F">
+                    <a-text value="Função: VIIm7b5" align="center" color="#000" scale="1.35 1.35 1.35" position="0 0 0.026"></a-text>
                 </a-box>
             </a-entity>
-            <!-- CORREÇÃO de nota: F#4 mantido (correto no Tone.js) -->
             <a-sphere class="clickable"
-                      interactive-text="notes: D4, F#4, A4, C5; label: V/V = D7"
+                      interactive-text="notes: B3, D4, F4, A4; label: Bm7(b5) (VIIm7b5)"
                       radius="1.2"
                       color="#00FF00" opacity="0.2" transparent="true"
                       position="0 2 0">
@@ -367,23 +518,22 @@
                       position="0 2 0"
                       animation="property: rotation; to: 360 360 0; loop: true; dur: 5000; easing: linear"></a-sphere>
             <a-entity position="0 2.8 0" look-at="#main-camera">
-                <a-box depth="0.05" width="1.8" height="0.6" color="#FFFFFF">
-                    <a-text value="V/V: D7" align="center" color="#000" scale="1.5 1.5 1.5" position="0 0 0.026"></a-text>
+                <a-box depth="0.05" width="2.3" height="0.6" color="#FFFFFF">
+                    <a-text value="Bm7(b5)" align="center" color="#000" scale="1.35 1.35 1.35" position="0 0 0.026"></a-text>
                 </a-box>
             </a-entity>
         </a-entity>
 
-        <!-- V/ii: A7 → resolve em Dm (ii) -->
+        <!-- Bdim7 (VIIdim7) -->
         <a-entity position="-4.85 0 3.53">
             <a-cylinder radius="1" height="0.4" color="#3498DB"></a-cylinder>
             <a-entity position="0 0.5 1" look-at="#main-camera">
                 <a-box depth="0.05" width="2.4" height="0.6" color="#3498DB">
-                    <a-text value="Alvo: Dm (ii)" align="center" color="#FFF" scale="1.5 1.5 1.5" position="0 0 0.026"></a-text>
+                    <a-text value="Função: VIIdim7" align="center" color="#FFF" scale="1.35 1.35 1.35" position="0 0 0.026"></a-text>
                 </a-box>
             </a-entity>
-            <!-- CORREÇÃO de nota: C#4 mantido (correto no Tone.js) -->
             <a-sphere class="clickable"
-                      interactive-text="notes: A3, C#4, E4, G4; label: V/ii = A7"
+                      interactive-text="notes: B3, D4, F4, G#4; label: Bdim7 (VIIdim7)"
                       radius="1.2"
                       color="#00FF00" opacity="0.2" transparent="true"
                       position="0 2 0">
@@ -391,23 +541,22 @@
             <a-octahedron radius="0.5" color="#2980B9" position="0 2 0"
                           animation="property: rotation; to: 0 360 360; loop: true; dur: 6000; easing: linear"></a-octahedron>
             <a-entity position="0 2.8 0" look-at="#main-camera">
-                <a-box depth="0.05" width="1.8" height="0.6" color="#FFFFFF">
-                    <a-text value="V/ii: A7" align="center" color="#000" scale="1.5 1.5 1.5" position="0 0 0.026"></a-text>
+                <a-box depth="0.05" width="2" height="0.6" color="#FFFFFF">
+                    <a-text value="Bdim7" align="center" color="#000" scale="1.5 1.5 1.5" position="0 0 0.026"></a-text>
                 </a-box>
             </a-entity>
         </a-entity>
 
-        <!-- V/vi: E7 → resolve em Am (vi) -->
+        <!-- G7sus4 (V7sus4) -->
         <a-entity position="-4.85 0 -3.53">
             <a-cylinder radius="1" height="0.4" color="#E74C3C"></a-cylinder>
             <a-entity position="0 0.5 1" look-at="#main-camera">
                 <a-box depth="0.05" width="2.4" height="0.6" color="#E74C3C">
-                    <a-text value="Alvo: Am (vi)" align="center" color="#FFF" scale="1.5 1.5 1.5" position="0 0 0.026"></a-text>
+                    <a-text value="Função: V7sus4" align="center" color="#FFF" scale="1.35 1.35 1.35" position="0 0 0.026"></a-text>
                 </a-box>
             </a-entity>
-            <!-- CORREÇÃO de nota: G#4 mantido (correto no Tone.js) -->
             <a-sphere class="clickable"
-                      interactive-text="notes: E4, G#4, B4, D5; label: V/vi = E7"
+                      interactive-text="notes: G3, C4, D4, F4; label: G7sus4 (V7sus4)"
                       radius="1.2"
                       color="#00FF00" opacity="0.2" transparent="true"
                       position="0 2 0">
@@ -415,23 +564,22 @@
             <a-dodecahedron radius="0.4" color="#C0392B" position="0 2 0"
                             animation="property: rotation; to: 360 0 360; loop: true; dur: 7000; easing: linear"></a-dodecahedron>
             <a-entity position="0 2.8 0" look-at="#main-camera">
-                <a-box depth="0.05" width="1.8" height="0.6" color="#FFFFFF">
-                    <a-text value="V/vi: E7" align="center" color="#000" scale="1.5 1.5 1.5" position="0 0 0.026"></a-text>
+                <a-box depth="0.05" width="2.2" height="0.6" color="#FFFFFF">
+                    <a-text value="G7sus4" align="center" color="#000" scale="1.5 1.5 1.5" position="0 0 0.026"></a-text>
                 </a-box>
             </a-entity>
         </a-entity>
 
-        <!-- V/IV: C7 → resolve em F (IV) -->
+        <!-- Db7 (bII7) -->
         <a-entity position="1.85 0 -5.71">
             <a-cylinder radius="1" height="0.4" color="#2ECC71"></a-cylinder>
             <a-entity position="0 0.5 1" look-at="#main-camera">
                 <a-box depth="0.05" width="2.2" height="0.6" color="#2ECC71">
-                    <a-text value="Alvo: F (IV)" align="center" color="#000" scale="1.5 1.5 1.5" position="0 0 0.026"></a-text>
+                    <a-text value="Função: bII7" align="center" color="#000" scale="1.5 1.5 1.5" position="0 0 0.026"></a-text>
                 </a-box>
             </a-entity>
-            <!-- CORREÇÃO CRÍTICA: Bb4 → A#4 (Tone.js usa # em vez de b) -->
             <a-sphere class="clickable"
-                      interactive-text="notes: C4, E4, G4, A#4; label: V/IV = C7"
+                      interactive-text="notes: C#4, F4, G#4, B4; label: Db7 (bII7)"
                       radius="1.2"
                       color="#00FF00" opacity="0.2" transparent="true"
                       position="0 2 0">
@@ -440,7 +588,7 @@
                            animation="property: rotation; to: 0 360 0; loop: true; dur: 4000; easing: linear"></a-tetrahedron>
             <a-entity position="0 2.8 0" look-at="#main-camera">
                 <a-box depth="0.05" width="1.8" height="0.6" color="#FFFFFF">
-                    <a-text value="V/IV: C7" align="center" color="#000" scale="1.5 1.5 1.5" position="0 0 0.026"></a-text>
+                    <a-text value="Db7" align="center" color="#000" scale="1.5 1.5 1.5" position="0 0 0.026"></a-text>
                 </a-box>
             </a-entity>
         </a-entity>
